@@ -3,10 +3,13 @@ import xml.etree.ElementTree as ET
 import csv
 from time import sleep
 
-# TODO: F06?
+# Possible further extensions:
+# - add date and link to each result
+# - add more attributes to each result
+# - dynamically detect 50k limit and get the other results
 
-# how many submissions to get
-NO_OF_SUBMISSIONS = 100000
+# how many submissions to get - 50000 is the max due to max window size in elastic search
+NO_OF_SUBMISSIONS = 50000
 
 # the prefix is necessary (in this format) for XML search (find function) to work
 def getXMLAttr(attr):
@@ -14,18 +17,16 @@ def getXMLAttr(attr):
 
 
 def getSearchResultsUrl(page, limit):
-    return f"https://api.vvz.nipez.cz/api/submissions/search?page={page}&limit={limit}&form=vz&workflowPlace=UVEREJNENO_VVZ&data.druhFormulare=F03&order%5Bdata.datumUverejneniVvz%5D=DESC"
+    # F03 form - first 50 thousand results
+    # return f"https://api.vvz.nipez.cz/api/submissions/search?page={page}&limit={limit}&form=vz&workflowPlace=UVEREJNENO_VVZ&data.druhFormulare=F03&order%5Bdata.datumUverejneniVvz%5D=DESC"
 
-# 50ms delay to not to overload the server
-# sleep(0.05)
+    # F03 form - last 50 thousand results
+    return f"https://api.vvz.nipez.cz/api/submissions/search?page={page}&limit={limit}&form=vz&workflowPlace=UVEREJNENO_VVZ&data.druhFormulare=F03&order%5Bdata.datumUverejneniVvz%5D=ASC"
 
 currSubmissions = []
 submissionRemaining = NO_OF_SUBMISSIONS
 page = 1
 
-
-# Uncomment result variable to print all the results (in larger quantities = memory issues)
-# results = []
 notCZK = 0
 noEstimate = 0
 xmlError = 0
@@ -91,7 +92,7 @@ with open('results.csv', 'w', newline='') as f:
                     elif xmlKind == "WORKS":
                         kind = "Stavební práce"
                     else:
-                        raise Exception()
+                        raise Exception("unknown kind")
                 except:
                     raise Exception("no kind")
 
@@ -110,20 +111,33 @@ with open('results.csv', 'w', newline='') as f:
                     raise Exception("no tender results")
                 
                 # počet soutěžících
-                noOfCompetitors = tenderResults.find(getXMLAttr("TENDERS")).find(
-                    getXMLAttr("NB_TENDERS_RECEIVED")).text
+                noOfCompetitors = None
+                # new XML format
+                try:
+                    noOfCompetitors = tenderResults.find(getXMLAttr("TENDERS")).find(
+                        getXMLAttr("NB_TENDERS_RECEIVED")).text
+                except:
+                    pass
+                # old XML format
+                if noOfCompetitors is None:
+                    try:
+                        noOfCompetitors = tenderResults.find(getXMLAttr("NB_TENDERS_RECEIVED")).text
+                    except:
+                        raise Exception("no number of competitors")
+                
+
 
                 # ceny
-                try:
-                    values = tenderResults.find(getXMLAttr("VALUES"))
-                except:
-                    raise Exception("no values")
+                values = tenderResults.find(getXMLAttr("VALUES"))
+                if values is None:
+                    # old XML format
+                    values = tenderResults
 
                 # očekávaná cena
                 try:
                     estimatedVal = values.find(getXMLAttr("VAL_ESTIMATED_TOTAL"))
                     if estimatedVal is None:
-                        raise Exception()
+                        raise Exception("no estimated value")
                 except:
                     noEstimate += 1
                     raise Exception("no estimated value")
@@ -132,7 +146,7 @@ with open('results.csv', 'w', newline='') as f:
                 try:
                     realVal = values.find(getXMLAttr("VAL_TOTAL"))
                     if realVal is None:
-                        raise Exception()
+                        raise Exception("no real value")
                 except:
                     raise Exception("no real value")
 
@@ -150,15 +164,12 @@ with open('results.csv', 'w', newline='') as f:
                     notCZK += 1
                     raise Exception("currency error")
 
-                # results.append(
-                #     {"title": title, "contractOwner": contractOwner, "kind": kind, "cpv": cpv, "real": realVal.text, "estimated": estimatedVal.text, "competitors": noOfCompetitors})
                 writer.writerow([title, contractOwner, kind, cpv, noOfCompetitors,
                                 realVal.text, estimatedVal.text])
             except Exception as err:
                 xmlError += 1
                 # print("ERROR IN XML", err, '(', SUBMISSION_SECOND_URL, ')')
 
-# print(results)
 print("celkem zpracováno", parsed)
 print("ne v CZK", notCZK)
 print("bez odhadu ceny", noEstimate)
